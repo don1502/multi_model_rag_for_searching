@@ -27,9 +27,14 @@ const createWindow = () => {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
+// --- IPC Handlers ---
+// These handlers catch requests from the Renderer process (UI) via the Preload bridge.
+
 app.whenReady().then(() => {
+  // Handler for sending messages to the chatbot
   ipcMain.handle('chat:send', async (event, message) => {
     try {
+      // Pass the message to the RAG service for processing
       const response = await ragService.getResponse(message);
       return response;
     } catch (error) {
@@ -38,8 +43,28 @@ app.whenReady().then(() => {
     }
   });
 
+  // Handler for sending speech/audio queries (MP3 format) to the chatbot
+  // This IPC handler receives a Uint8Array (MP3 Buffer) from the renderer
+  ipcMain.handle('chat:send-speech', async (event, audioBuffer, fileName) => {
+    try {
+      // DEVELOPMENT TIP: audioBuffer is a standard Node.js Buffer containing MP3 data.
+      // You can write this to disk, upload to S3, or stream it to an STT API.
+      const response = await ragService.processSpeechQuery(audioBuffer, fileName);
+      return response;
+    } catch (error) {
+      console.error('Speech RAG Service Error:', error);
+      return "I'm sorry, I encountered an error processing your voice request.";
+    }
+  });
+
+  let mockStorage = []; // Simulated database for chat sessions
+  let documentStorage = []; // Simulated database for uploaded document metadata
+
+  // Handler for document uploads
+  // This triggers OS-level file selection dialogs
   ipcMain.handle('documents:upload', async (event, type = 'document') => {
     let filters = [];
+    // Define allowed extensions based on media type
     if (type === 'video') {
       filters = [{ name: 'Videos', extensions: ['mp4', 'mkv', 'avi', 'mov'] }];
     } else if (type === 'audio') {
@@ -51,7 +76,7 @@ app.whenReady().then(() => {
     }
 
     const { canceled, filePaths } = await dialog.showOpenDialog({
-      properties: ['openFile', 'multiSelections'],
+      properties: ['openFile', 'multiSelections'], // Allow multiple file selection
       filters: filters
     });
 
@@ -60,7 +85,23 @@ app.whenReady().then(() => {
     }
 
     try {
+      // Send the absolute file paths to the RAG service for indexing
       const result = await ragService.uploadDocuments(filePaths, type);
+      if (result.success) {
+        const uploadedFiles = [];
+        // Store metadata in documentStorage for the "Documents" sidebar
+        filePaths.forEach(filePath => {
+          const doc = {
+            name: path.basename(filePath),
+            path: filePath,
+            type: type,
+            date: new Date().toLocaleString()
+          };
+          documentStorage.push(doc);
+          uploadedFiles.push({ name: doc.name, type: doc.type });
+        });
+        return { ...result, uploadedFiles };
+      }
       return result;
     } catch (error) {
       console.error('Upload Error:', error);
@@ -68,13 +109,9 @@ app.whenReady().then(() => {
     }
   });
 
-  /**
-   * BACKEND DEVELOPER NOTE:
-   * The following handlers are placeholders for Chat History persistence.
-   * You should replace the 'mockStorage' logic with a database (e.g., SQLite, PouchDB)
-   * or a local file storage system (e.g., electron-store).
-   */
-  let mockStorage = []; // Replace with actual DB connection
+  ipcMain.handle('documents:get-all', async () => {
+    return documentStorage;
+  });
 
   ipcMain.handle('history:save', async (event, chatSession) => {
     // Logic to save or update a chat session
