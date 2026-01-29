@@ -1,10 +1,40 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, protocol, net } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
+const url = require('node:url');
 const ragService = require('./services/ragService');
+
+// Register protocol for local images
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'local-resource', privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: true, stream: true } }
+]);
 
 let mainWindow;
 let mockStorage = []; // Simulated database for chat sessions
 let documentStorage = []; // Simulated database for uploaded document metadata
+
+/**
+ * Recursively gets all file paths from a directory.
+ * @param {string} dirPath 
+ * @param {string[]} arrayOfFiles 
+ * @returns {string[]}
+ */
+function getAllFiles(dirPath, arrayOfFiles) {
+  const files = fs.readdirSync(dirPath);
+
+  arrayOfFiles = arrayOfFiles || [];
+
+  files.forEach(function(file) {
+    const fullPath = path.join(dirPath, file);
+    if (fs.statSync(fullPath).isDirectory()) {
+      arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
+    } else {
+      arrayOfFiles.push(fullPath);
+    }
+  });
+
+  return arrayOfFiles;
+}
 
 /**
  * Shared logic for uploading documents or folders.
@@ -34,7 +64,7 @@ async function performUpload(type = 'document') {
     }
   }
 
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+  const { canceled, filePaths: selectedPaths } = await dialog.showOpenDialog(mainWindow, {
     properties: properties,
     filters: filters
   });
@@ -43,20 +73,28 @@ async function performUpload(type = 'document') {
     return { success: false, message: 'Upload canceled' };
   }
 
+  let finalFilePaths = selectedPaths;
+  if (type === 'folder') {
+    finalFilePaths = [];
+    selectedPaths.forEach(folderPath => {
+      finalFilePaths.push(...getAllFiles(folderPath));
+    });
+  }
+
   try {
     // BACKEND CALL: 'ragService.uploadDocuments' is where you'd trigger your
     // Python/Node service to start the ingestion pipeline (OCR -> Chunk -> Embed -> Vector DB).
-    const result = await ragService.uploadDocuments(filePaths, type);
+    const result = await ragService.uploadDocuments(finalFilePaths, type);
     
     if (result.success) {
       const uploadedFiles = [];
       // Upon successful ingestion, we store the metadata locally to show in the UI.
       // In a production app, you might fetch this list from your Vector DB instead.
-      filePaths.forEach(filePath => {
+      finalFilePaths.forEach(filePath => {
         const doc = {
           name: path.basename(filePath),
           path: filePath,
-          type: type,
+          type: type === 'folder' ? 'document' : type,
           date: new Date().toLocaleString()
         };
         documentStorage.push(doc);
@@ -91,6 +129,19 @@ const createWindow = () => {
   // and load the index.html of the app.
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
+  mainWindow.webContents.on('context-menu', (e, props) => {
+    const { x, y } = props;
+
+    Menu.buildFromTemplate([
+      {
+        label: 'Developer Tools',
+        click: () => {
+          mainWindow.webContents.openDevTools();
+        }
+      }
+    ]).popup(mainWindow);
+  });
+
   // Open the DevTools.
   mainWindow.webContents.openDevTools();
 };
@@ -107,6 +158,33 @@ if (require('electron-squirrel-startup')) {
 // These handlers catch requests from the Renderer process (UI) via the Preload bridge.
 
 app.whenReady().then(() => {
+  // Handle local resources
+  protocol.handle('local-resource', async (request) => {
+    try {
+      const url = new URL(request.url);
+      // On Windows, the path might be /C:/Users/... or C:/Users/...
+      let decodedPath = decodeURIComponent(url.pathname);
+      
+      // If the pathname starts with / and then a drive letter (e.g., /C:/), remove the /
+      if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(decodedPath)) {
+        decodedPath = decodedPath.slice(1);
+      }
+      
+      // Also handle the case where host + pathname is the full path
+      // (Depends on how the URL was constructed)
+      let finalPath = decodedPath;
+      if (url.host && url.host !== '' && process.platform === 'win32') {
+        finalPath = path.join(url.host + ':', decodedPath);
+      }
+
+      const data = await fs.promises.readFile(path.normalize(finalPath));
+      return new Response(data);
+    } catch (error) {
+      console.error('Protocol error:', error);
+      return new Response('File not found', { status: 404 });
+    }
+  });
+
   // Handler for sending messages to the chatbot
   ipcMain.handle('chat:send', async (event, message) => {
     try {
@@ -164,6 +242,35 @@ app.whenReady().then(() => {
     return { success: true };
   });
 
+  // Handler for custom theme image selection
+  ipcMain.handle('theme:select-image', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Background Image',
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] }]
+    });
+
+    if (canceled || filePaths.length === 0) return null;
+
+    const sourcePath = filePaths[0];
+    const themesDir = path.join(app.getPath('userData'), 'themes');
+    
+    if (!fs.existsSync(themesDir)) {
+      fs.mkdirSync(themesDir, { recursive: true });
+    }
+
+    const fileName = `custom-theme${path.extname(sourcePath)}`;
+    const destinationPath = path.join(themesDir, fileName);
+    
+    fs.copyFileSync(sourcePath, destinationPath);
+    
+    return destinationPath;
+  });
+
+  ipcMain.handle('theme:get-default-path', () => {
+    return path.join(__dirname, 'optic.jpg');
+  });
+
   createWindow();
   createMenu();
 
@@ -201,11 +308,7 @@ function createMenu() {
         { type: 'separator' },
         { role: 'quit' }
       ]
-    },
-    { role: 'editMenu' },
-    { role: 'viewMenu' },
-    { role: 'windowMenu' },
-    { role: 'help' }
+    }
   ];
 
   const menu = Menu.buildFromTemplate(template);
