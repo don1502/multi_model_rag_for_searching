@@ -216,6 +216,43 @@ app.whenReady().then(() => {
     return await performUpload(type);
   });
 
+  // Handler for webcam photo upload
+  ipcMain.handle('documents:upload-webcam', async (event, imageBuffer, fileName) => {
+    try {
+      // Save the image buffer to a temporary file
+      const tempDir = path.join(app.getPath('temp'), 'ragpt-webcam');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+      const tempPath = path.join(tempDir, fileName);
+      fs.writeFileSync(tempPath, Buffer.from(imageBuffer));
+
+      // Process the file like a regular image upload
+      const result = await ragService.uploadDocuments([tempPath], 'image');
+
+      if (result.success) {
+        const doc = {
+          name: fileName,
+          path: tempPath,
+          type: 'image',
+          date: new Date().toLocaleString()
+        };
+        documentStorage.push(doc);
+
+        // Notify UI
+        if (mainWindow) {
+          mainWindow.webContents.send('documents:refreshed');
+        }
+
+        return { success: true, uploadedFiles: [{ name: doc.name, type: doc.type }] };
+      }
+      return result;
+    } catch (error) {
+      console.error('Webcam upload error:', error);
+      return { success: false, message: 'Failed to upload webcam photo' };
+    }
+  });
+
   ipcMain.handle('documents:get-all', async () => {
     return documentStorage;
   });

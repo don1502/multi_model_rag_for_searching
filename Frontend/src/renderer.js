@@ -219,7 +219,7 @@ async function refreshDocumentList() {
   documentList.innerHTML = '';
   
   if (documents.length === 0) {
-    documentList.innerHTML = '<li>No documents uploaded</li>';
+    documentList.innerHTML = '<li>No files uploaded</li>';
     return;
   }
 
@@ -622,6 +622,63 @@ if (savedTheme === 'custom') {
 }
 
 /**
+ * Handles webcam photo capture and upload.
+ */
+async function handleWebcamCapture() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+
+    // Create temporary video element
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.style.display = 'none';
+    document.body.appendChild(video);
+    video.play();
+
+    // Wait for video metadata
+    await new Promise(resolve => {
+      video.onloadedmetadata = resolve;
+    });
+
+    // Create canvas for capture
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
+
+    // Stop stream and remove video
+    stream.getTracks().forEach(track => track.stop());
+    document.body.removeChild(video);
+
+    // Convert to buffer and upload
+    canvas.toBlob(async blob => {
+      const fileName = `webcam_${Date.now()}.png`;
+      const arrayBuffer = await blob.arrayBuffer();
+      const imageBuffer = new Uint8Array(arrayBuffer);
+
+      // Upload via IPC
+      const result = await window.electronAPI.uploadWebcam(imageBuffer, fileName);
+
+      if (result.success) {
+        if (result.uploadedFiles) {
+          // Stage the files in the preview area
+          uploadedDocs.push(...result.uploadedFiles);
+          renderUploadedDocs();
+        }
+        // Refresh the sidebar list
+        await refreshDocumentList();
+      } else {
+        appendMessage(false, `❌ **Error**: ${result.message}`);
+      }
+    }, 'image/png');
+  } catch (error) {
+    console.error('Webcam capture error:', error);
+    alert('Could not access webcam. Please check permissions.');
+  }
+}
+
+/**
  * Handles the upload trigger for specific media types.
  * @param {string} type - 'document', 'folder', 'video', etc.
  * @param {HTMLElement} sourceButton - The button that triggered the upload (for showing loading state).
@@ -630,19 +687,25 @@ async function handleUpload(type, sourceButton = null) {
   const uploadBtn = sourceButton || document.getElementById('upload-btn');
   const uploadMenu = document.getElementById('upload-menu');
   const originalHTML = uploadBtn.innerHTML;
-  
+
   if (uploadMenu) {
     uploadMenu.classList.remove('show');
+  }
+
+  if (type === 'webcam') {
+    // Handle webcam capture directly in renderer
+    await handleWebcamCapture();
+    return;
   }
 
   try {
     // Show loading state while the Main process handles file selection and RAG ingestion.
     uploadBtn.disabled = true;
     uploadBtn.innerHTML = '<span class="loading-spinner"></span>';
-    
+
     // Request Main process to open file dialog and process files.
     const result = await window.electronAPI.uploadDocuments(type);
-    
+
     if (result.success) {
       if (result.uploadedFiles) {
         // Stage the files in the preview area if they are intended for the next chat prompt.

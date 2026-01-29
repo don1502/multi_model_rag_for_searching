@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Document management
   uploadDocuments: (type) => ipcRenderer.invoke('documents:upload', type),
+  uploadWebcam: (imageBuffer, fileName) => ipcRenderer.invoke('documents:upload-webcam', imageBuffer, fileName),
   getDocuments: () => ipcRenderer.invoke('documents:get-all'),
   
   /**
