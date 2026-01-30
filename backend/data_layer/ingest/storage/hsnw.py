@@ -3,6 +3,11 @@ import os
 import faiss
 import numpy as np
 
+try:
+    from storage.embedding import EmbeddingRecord
+except Exception as e:
+    raise ImportError(f"The following exception occured: \n{e}")
+
 
 class HNSWIndex:
     def __init__(
