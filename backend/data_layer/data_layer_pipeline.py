@@ -16,7 +16,6 @@ import sys
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
-print(parent_dir)
 sys.path.append(parent_dir)
 
 
@@ -33,7 +32,6 @@ from ingest.Text_files_processing.text_extractor import TextExtractor
 
 # You must provide your embedding model here
 from sentence_transformers import SentenceTransformer
-from torch import cudnn_convolution_relu
 
 from config import Config
 

@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import faiss
 import numpy as np
@@ -13,7 +14,7 @@ class HNSWIndex:
     def __init__(
         self,
         dim: int,
-        index_path: str,
+        index_path: Path,
         M: int = 32,
         ef_construction: int = 200,
         ef_search: int = 64,
@@ -90,21 +91,30 @@ class HNSWIndex:
         return results
 
     def save(self) -> None:
-        faiss.write_index(self.index, self.index_path)
+        self.index_path = Path(self.index_path)
 
-        # Save ID mapping
-        with open(self.index_path + ".ids", "w") as f:
+        self.index_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not self.index_path.exists():
+            with open(self.index_path, "x") as file:
+                pass
+
+        path_str = str(self.index_path)
+
+        faiss.write_index(self.index, path_str)
+
+        print(f"Saving index to: {path_str}")
+        with open(path_str + ".ids", "w") as f:
             for eid in self.id_map:
-                f.write(eid + "\n")
+                print(type(eid))
+                f.write(eid[0] + "\n")
 
     def load(self) -> None:
         if not os.path.exists(self.index_path):
             return
 
         self.index = faiss.read_index(self.index_path)
-
-        # Load ID mapping
-        ids_path = self.index_path + ".ids"
+        ids_path = str(self.index_path) + ".ids"
         if not os.path.exists(ids_path):
             raise FileNotFoundError(
                 f"ID mapping file not found: {ids_path}. "
@@ -114,7 +124,6 @@ class HNSWIndex:
         with open(ids_path) as f:
             self.id_map = [line.strip() for line in f]
 
-        # Critical: Guard against index/id_map mismatch
         assert self.index.ntotal == len(self.id_map), (
             f"FAISS index and id_map size mismatch: "
             f"index has {self.index.ntotal} vectors, "
@@ -122,5 +131,4 @@ class HNSWIndex:
             f"This indicates corruption or incomplete save/load."
         )
 
-        # Rebuild known_ids set for idempotent additions after load
         self._known_ids = set(self.id_map)
