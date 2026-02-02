@@ -106,7 +106,6 @@ class HNSWIndex:
         print(f"Saving index to: {path_str}")
         with open(path_str + ".ids", "w") as f:
             for eid in self.id_map:
-                print(type(eid))
                 f.write(eid[0] + "\n")
 
     def load(self) -> None:
