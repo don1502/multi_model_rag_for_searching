@@ -6,6 +6,11 @@ accelerate
 opencv-python
 pytesseract
 
+# ---For Audio---
+openai-whisper
+pydub
+
+
 # --- Vector Database ---
 # Specific wheel for modern CUDA/Python support
 faiss-gpu-cu12
