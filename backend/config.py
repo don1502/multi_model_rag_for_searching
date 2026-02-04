@@ -13,6 +13,7 @@ class Config:
 
     EMBEDDING_BATCH_SIZE = 64
     ANN_TOP_K = 5
+    METADATA_DB_PATH = Path("data/index/chunks.db")
 
 
 if __name__ == "__main__":

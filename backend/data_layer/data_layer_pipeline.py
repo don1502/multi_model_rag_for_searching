@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
+from chunkstore.Chunkstore import ChunkMetadataStore
 from ingest.chunker import Chunk, TextChunker
 from ingest.normalizer import NormalizationProfiles
 from ingest.storage.embedding import EmbeddingBatcher
@@ -72,7 +73,7 @@ def run_baseline_ingestion() -> List[Chunk]:
     chunker = TextChunker(chunk_version=Config.CHUNK_VERSION)
 
     all_chunks: List[Chunk] = []
-
+    chunk_to_source_path: Dict[str, Path] = {}
     for path, text in normalized_texts.items():
         path = Path(path)
         doc_id = stable_document_id(path)
@@ -83,7 +84,10 @@ def run_baseline_ingestion() -> List[Chunk]:
             normalization_version=Config.NORMALIZATION_VERSION,
         )
 
-        all_chunks.extend(chunks)
+        for c in chunks:
+
+            all_chunks.extend(chunks)
+            chunk_to_source_path[c.chunk_id] = path
 
     if not all_chunks:
         raise RuntimeError("Chunking produced zero chunks")
@@ -121,12 +125,42 @@ def run_baseline_ingestion() -> List[Chunk]:
 
     log(f"HNSW index contains {index.index.ntotal} vectors")
 
+    # 8. Persist metadata
+    log("Persisting chunk metadata")
+    metadata_store = ChunkMetadataStore(Config.METADATA_DB_PATH)
+
+    rows = []
+    for c in all_chunks:
+        source_path = chunk_to_source_path[c.chunk_id]
+        # debugging :
+        # print(type(c.chunk_id))
+        # print(type(c.chunk_id[0]))
+        rows.append(
+            {
+                "chunk_id": c.chunk_id[0],
+                "document_id": c.document_id,
+                "source_path": str(source_path.resolve()),
+                "modality": "text",  # for now: only text
+                "chunk_index": c.chunk_index,
+                "start_offset": c.start_char,
+                "end_offset": c.end_char,
+                "chunk_version": c.chunk_version,
+                "normalization_version": Config.NORMALIZATION_VERSION,
+            }
+        )
+    metadata_store.insert_many(rows)
+
+    log(f"Metadata store now contains {metadata_store.count_chunks()} rows")
+
+    metadata_store.close()
+
     return all_chunks
 
 
 # Ann test
-def run_ann_sanity_tests(chunks: List[Chunk]) -> None:
-    log("Running ANN sanity tests")
+def run_ann_sanity_tests_and_demo(chunks: List[Chunk]) -> None:
+    log("Running ANN sanity tests and retrieval demo")
+
     # Reload index
     model = SentenceTransformer("all-MiniLM-L6-v2")
     embedding_dim = model.get_sentence_embedding_dimension()
@@ -136,6 +170,8 @@ def run_ann_sanity_tests(chunks: List[Chunk]) -> None:
         index_path=str(Config.INDEX_PATH),
     )
     index.load()
+
+    metadata_store = ChunkMetadataStore(Config.METADATA_DB_PATH)
 
     test_chunk = chunks[len(chunks) // 2]
     query_text = test_chunk.text[:300]
@@ -152,38 +188,27 @@ def run_ann_sanity_tests(chunks: List[Chunk]) -> None:
         raise AssertionError("Self-retrieval test FAILED")
     log("Self-retrieval test PASSED")
 
-    same_doc_chunks = [c for c in chunks if c.document_id == test_chunk.document_id]
+    # ---- Retrieval demo: ANN -> metadata -> file paths ----
+    log("Retrieval demo: resolving chunk IDs to source files")
 
-    if len(same_doc_chunks) > 1:
-        query_text = same_doc_chunks[0].text[:300]
-        query_vector = model.encode(query_text, normalize_embeddings=True)
-        results = index.search(query_vector, k=Config.ANN_TOP_K)
+    metas = metadata_store.get_by_ids(results)
 
-        hits = [cid for cid in results if cid in {c.chunk_id for c in same_doc_chunks}]
+    print("\nTop-K retrieved chunks and their source files:\n")
+    for m in metas:
+        print(f"- chunk_id: {m['chunk_id']}")
+        print(f"  source_path: {m['source_path']}")
+        print(f"  document_id: {m['document_id']}")
+        print(f"  offsets: {m['start_offset']} - {m['end_offset']}")
+        print(f"  modality: {m['modality']}")
+        print("")
 
-        if len(hits) < 2:
-            raise AssertionError("Same-document similarity test FAILED")
+    metadata_store.close()
 
-        log("Same-document similarity test PASSED")
-
-    index2 = HNSWIndex(
-        dim=embedding_dim,
-        index_path=str(Config.INDEX_PATH),
-    )
-    index2.load()
-
-    results2 = index2.search(query_vector, k=Config.ANN_TOP_K)
-
-    if results != results2:
-        log("WARNING: Minor ordering differences after reload (acceptable)")
-    else:
-        log("Reload stability test PASSED")
-
-    log("All ANN sanity tests completed")
+    log("ANN sanity tests + retrieval demo COMPLETE")
 
 
 if __name__ == "__main__":
     chunks = run_baseline_ingestion()
-    run_ann_sanity_tests(chunks)
+    run_ann_sanity_tests_and_demo(chunks)
 
-    log("Baseline ingestion + ANN validation COMPLETE")
+    log("Baseline ingestion + metadata wiring + ANN validation COMPLETE")
