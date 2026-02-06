@@ -15,6 +15,14 @@ class Config:
     ANN_TOP_K = 5
     METADATA_DB_PATH = Path("data/index/chunks.db")
 
+    L1_CAPACITY = 32
+    L2_CAPACITY = 128
+    L3_CAPACITY = 1024
+    RECENCY_BOOST = 0.2
+    L1_THRESHOLD = 20
+    L2_THRESHOLD = 8
+    L3_THRESHOLD = 3
+
 
 if __name__ == "__main__":
     test_config = Config()

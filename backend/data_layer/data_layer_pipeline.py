@@ -1,6 +1,4 @@
 """
-Baseline data-layer ingestion + ANN sanity tests.
-
 This script:
 - Builds the semantic vector index from a fixed dataset
 - Validates ANN behavior with deterministic sanity checks
